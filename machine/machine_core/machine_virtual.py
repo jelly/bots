@@ -27,6 +27,8 @@ import subprocess
 import tempfile
 import sys
 import time
+from collections import namedtuple
+from typing import Dict, IO, List, Optional
 
 from lib.constants import TEST_DIR, BOTS_DIR
 from .exceptions import Failure, RepeatableFailure
@@ -37,10 +39,13 @@ sys.path.insert(1, BOTS_DIR)
 MEMORY_MB = 1152
 
 
+Disk = namedtuple('Disk', ['path', 'serial', 'filename', 'dev', 'index', 'type'])
+
+
 # based on http://stackoverflow.com/a/17753573
 # we use this to quieten down calls
 @contextlib.contextmanager
-def stdchannel_redirected(stdchannel, dest_filename):
+def stdchannel_redirected(stdchannel: IO[str], dest_filename: str):
     """
     A context manager to temporarily redirect stdout or stderr
     e.g.:
@@ -139,15 +144,15 @@ TEST_USERNET_XML = """
 
 
 class VirtNetwork:
-    def __init__(self, network=None, image="generic"):
-        self.locked = []
+    def __init__(self, id: Optional[int] = None, image: str = "generic"):
+        self.locked: List[int] = []
         self.image = image
 
-        if network is None:
+        if id is None:
             offset = 0
             force = False
         else:
-            offset = network * 100
+            offset = id * 100
             force = True
 
         # This is a shared port used as the identifier for the socket mcast network
@@ -162,7 +167,7 @@ class VirtNetwork:
         # Unique hostnet identifiers
         self.hostnet = 8
 
-    def _lock(self, start, step=1, force=False):
+    def _lock(self, start: int, step: int = 1, force: bool = False) -> int:
         resources = os.path.join(tempfile.gettempdir(), ".cockpit-test-resources")
         try:
             os.mkdir(resources, 0o755)
@@ -186,7 +191,7 @@ class VirtNetwork:
         raise Failure("Couldn't find unique network port number")
 
     # Create resources for an interface, returns address and XML
-    def interface(self, number=None):
+    def interface(self, number: Optional[int] = None):
         if number is None:
             number = self.last + 1
         if number > self.last:
@@ -203,7 +208,8 @@ class VirtNetwork:
         }
         return result
 
-    def host(self, number=None, restrict=False, isolate=False, forward={}):
+    def host(self, number: Optional[int] = None, restrict: bool = False, isolate: bool = False,
+             forward: Dict[str, int] = {}):
         '''Create resources for a host, returns address and XML
 
         isolate: True for no network at all, "user" for QEMU user network instead of bridging
@@ -244,8 +250,8 @@ class VirtMachine(Machine):
     memory_mb = None
     cpus = None
 
-    def __init__(self, image, networking=None, maintain=False, memory_mb=None, cpus=None,
-                 graphics=False, overlay_dir=None, **args):
+    def __init__(self, image: str, networking=None, maintain=False, memory_mb=None, cpus=None,
+                 graphics: bool = False, overlay_dir=None, **args):
         self.maintain = maintain
 
         # Currently all images are run on x86_64. When that changes we will have
@@ -281,7 +287,7 @@ class VirtMachine(Machine):
 
         self.virt_connection = self._libvirt_connection(hypervisor="qemu:///session")
 
-        self._disks = []
+        self._disks: List[Disk] = []
         self._domain = None
         self._transient_image = None
 
@@ -444,7 +450,7 @@ class VirtMachine(Machine):
             # Normally only one pass
             break
 
-    def stop(self, timeout_sec=120):
+    def stop(self, timeout_sec: int = 120):
         if self.maintain:
             self.shutdown(timeout_sec=timeout_sec)
         else:
@@ -480,7 +486,7 @@ class VirtMachine(Machine):
                 pass
         self._cleanup(quick=True)
 
-    def wait_poweroff(self, timeout_sec=120):
+    def wait_poweroff(self, timeout_sec: int = 120):
         # shutdown must have already been triggered
         if self._domain:
             start_time = time.time()
@@ -543,34 +549,34 @@ class VirtMachine(Machine):
         if self._domain.attachDeviceFlags(disk_desc, libvirt.VIR_DOMAIN_AFFECT_LIVE) != 0:
             raise Failure("Unable to add disk to vm")
 
-        disk = {
-            "path": image,
-            "serial": serial,
-            "filename": image,
-            "dev": dev,
-            "index": index,
-            "type": type,
-        }
+        disk = Disk(
+            path=image,
+            serial=serial,
+            filename=image,
+            dev=dev,
+            index=index,
+            type=type,
+        )
 
         self._disks.append(disk)
         return disk
 
-    def rem_disk(self, disk, quick=False):
+    def rem_disk(self, disk: Disk, quick: bool = False):
         if not quick:
             disk_desc = TEST_DISK_XML % {
-                'file': disk["filename"],
-                'serial': disk["serial"],
-                'unit': disk["index"],
-                'dev': disk["dev"],
-                'type': disk["type"]
+                'file': disk.filename,
+                'serial': disk.serial,
+                'unit': disk.index,
+                'dev': disk.dev,
+                'type': disk.type
             }
 
             if self._domain:
                 if self._domain.detachDeviceFlags(disk_desc, libvirt.VIR_DOMAIN_AFFECT_LIVE) != 0:
                     raise Failure("Unable to remove disk from vm")
-        os.unlink(disk['filename'])
+        os.unlink(disk.filename)
 
-    def _qemu_monitor(self, command):
+    def _qemu_monitor(self, command: str):
         self.message("& " + command)
         # you can run commands manually using virsh:
         # virsh -c qemu:///session qemu-monitor-command [domain name/id] --hmp [command]
