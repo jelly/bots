@@ -130,6 +130,7 @@ REPO_BRANCH_CONTEXT = {
         # These can be triggered manually with bots/tests-trigger
         '_manual': [
             'fedora-rawhide',
+            f'{TEST_OS_DEFAULT}/devel',
         ],
     },
     'candlepin/subscription-manager': {
