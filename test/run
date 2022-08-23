@@ -6,4 +6,6 @@ set -eu
 PYEXEFILES="$(git grep -lI '^#!.*python') $(git ls-files "*.py")"
 flake8 $PYEXEFILES
 
+mypy --no-error-summary --ignore-missing-imports --scripts-are-modules .
+
 ./test-bots
