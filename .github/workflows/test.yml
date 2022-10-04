@@ -48,10 +48,6 @@ jobs:
               ':!vm-run' \
           >&2 || echo "::set-output name=changed::true"
 
-      - name: Ensure branch was proposed from origin
-        if: steps.changes.outputs.changed
-        run: test "${{ github.event.pull_request.head.repo.url }}" = "${{ github.event.pull_request.base.repo.url }}"
-
       - name: Clone cockpituous repository
         if: steps.changes.outputs.changed
         uses: actions/checkout@v2
