@@ -27,15 +27,13 @@ import urllib.request
 import urllib.parse
 import urllib.error
 
-from typing import Any, Dict, Optional
-
 __all__ = (
     'Cache',
 )
 
 
 class Cache(object):
-    def __init__(self, directory: str, lag: Optional[int] = None):
+    def __init__(self, directory, lag=None):
         self.directory = directory
         self.pruned = False
 
@@ -50,10 +48,10 @@ class Cache(object):
         self.lag = lag
 
         # The mark tells us that stuff before this time is not "current"
-        self.marked: float = 0
+        self.marked = 0
 
     # Prune old expired data from the cache directory
-    def prune(self) -> None:
+    def prune(self):
         if not os.path.exists(self.directory):
             return
         now = time.time()
@@ -66,7 +64,7 @@ class Cache(object):
             pass
 
     # Read a resource from the cache or return None
-    def read(self, resource: str) -> Optional[Dict[Any, Any]]:
+    def read(self, resource):
         path = os.path.join(self.directory, urllib.parse.quote(resource, safe=''))
         try:
             with open(path, 'r') as fp:
@@ -75,7 +73,7 @@ class Cache(object):
             return None
 
     # Write a resource to the cache in an atomic way
-    def write(self, resource: str, contents: Dict[Any, Any]) -> None:
+    def write(self, resource, contents):
         path = os.path.join(self.directory, urllib.parse.quote(resource, safe=''))
         os.makedirs(self.directory, exist_ok=True)
         (fd, temp) = tempfile.mkstemp(dir=self.directory)
@@ -88,13 +86,13 @@ class Cache(object):
             self.prune()
 
     # Tell the cache that stuff before this time is not "current"
-    def mark(self, mtime: Optional[float] = None) -> None:
+    def mark(self, mtime=None):
         if not mtime:
             mtime = time.time()
         self.marked = mtime
 
     # Check if a given resource in the cache is "current" or not
-    def current(self, resource: str) -> bool:
+    def current(self, resource):
         path = os.path.join(self.directory, urllib.parse.quote(resource, safe=''))
         try:
             mtime = os.path.getmtime(path)
