@@ -209,6 +209,7 @@ def main():
     args = parser.parse_args()
 
     if args.debug:
+        print('debbugging')
         logging.basicConfig(level=logging.DEBUG)
 
     if args.s3:
