@@ -17,7 +17,7 @@ import sys
 import time
 import urllib.parse
 import urllib.request
-from typing import Dict, List, Iterable, IO
+from typing import Dict, List, Generator, IO, Union, Any
 import xml.etree.ElementTree as ET
 
 from .directories import xdg_config_home
@@ -123,22 +123,24 @@ def urlopen(url: urllib.parse.ParseResult, method='GET', headers={}, data=b'') -
     return response
 
 
-def list_bucket(url: urllib.parse.ParseResult) -> ET:
+def list_bucket(url: urllib.parse.ParseResult) -> ET.Element:
     """Get the ListBucketResult as a xml.etree.ElementTree"""
     with urlopen(url) as response:
         return ET.fromstring(response.read())
 
 
-def parse_list(result: ET, *keys) -> Iterable[Iterable[str]]:
+def parse_list(result: ET.Element, *keys) -> Generator[Union[str, None, Any], None, None]:
     """For each item in the bucket, return the given keys"""
     # 'http' url is API: see https://doc.s3.amazonaws.com/2006-03-01/AmazonS3.wsdl
     xmlns = {'s3': 'http://s3.amazonaws.com/doc/2006-03-01/'}
     for child in result.findall('s3:Contents', xmlns):
-        yield (child.find(f's3:{key}', xmlns).text for key in keys)
+        yield (child.find(f's3:{key}', xmlns).text for key in keys)  # type: ignore
 
 
 def sign_url(url: urllib.parse.ParseResult, method='GET', headers=[], duration=12 * 60 * 60) -> str:
     """Returns a "pre-signed" url for the given method and headers"""
+    if url.hostname is None:
+        sys.exit(f'hostname is None for {url.path}')
     access, secret = get_key(url.hostname)
     bucket = url.hostname.split('.')[0]
 
