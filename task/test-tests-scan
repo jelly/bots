@@ -1,0 +1,237 @@
+#!/usr/bin/env python3
+
+# This file is part of Cockpit.
+#
+# Copyright (C) 2023 Red Hat, Inc.
+#
+# Cockpit is free software; you can redistribute it and/or modify it
+# under the terms of the GNU Lesser General Public License as published by
+# the Free Software Foundation; either version 2.1 of the License, or
+# (at your option) any later version.
+#
+# Cockpit is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+# Lesser General Public License for more details.
+#
+# You should have received a copy of the GNU Lesser General Public License
+# along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+
+import json
+import multiprocessing
+import os
+import shutil
+import subprocess
+import tempfile
+import unittest
+
+from lib.constants import BOTS_DIR
+
+ADDRESS = ("127.0.0.7", 9898)
+
+
+DATA = {
+    "/repos/project/repo": {
+        "default_branch": "main"
+    },
+    "/repos/project/repo/issues/3333": {
+        "title": "The issue title",
+        "body": "Some bug\n - [ ] image-refresh foonux\n",
+    },
+    "/repos/project/repo/pulls/1": {
+        "title": "PR title",
+        "number": 1,
+        "body": "This is the body",
+        "base": {"ref": "abcdef"},
+        "head": {"sha": "abcdef", "user": {"login": "cockpit-project"}},
+        "labels": [],
+    },
+    "/repos/project/repo/commits/abcdef/status?page=1&per_page=100": {
+        "state": "pending",
+        "statuses": [],
+        "sha": "abcdef",
+    },
+    "/users/user/repos": [{"full_name": "project/repo"}]
+}
+
+
+PULL_DATA = {
+    "id": 1,
+    "number": 1,
+    "state": "open",
+    "title": "Image refresh for fedora-testing",
+    "labels": [],
+    "user": {
+        "login": "cockpit-project",
+    },
+    "body": "PR body",
+    "head": {
+        "ref": "refresh-fedora-testing-2016-09-10",
+        "sha": "abcdef",
+        "user": {
+            "login": "cockpit-project",
+        },
+    },
+    "base": {
+        "ref": "abcdef",
+        "sha": "abcdef",
+        "user": {
+            "login": "cockpit-project",
+        },
+    }
+}
+
+
+def mockServer():
+    # Data used by below handler
+    data = {}
+
+    import http.server
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+
+        def replyData(self, value, headers={}, status=200):
+            self.send_response(status)
+            for name, content in headers.items():
+                self.send_header(name, content)
+            self.end_headers()
+            self.wfile.write(value)
+            self.wfile.flush()
+
+        def replyJson(self, value, headers=None, status=200):
+            all_headers = {"Content-type": "application/json"}
+            all_headers.update(headers or {})
+            self.replyData(json.dumps(value).encode('utf-8'), headers=all_headers, status=status)
+
+        def do_GET(self):
+            if self.path in DATA:
+                self.replyJson(DATA[self.path])
+            elif self.path.startswith('/repos/project/repo/pulls/2'):
+                self.replyJson([])
+            elif self.path.startswith('/repos/project/repo/pulls'):
+                self.replyJson([PULL_DATA])
+            else:
+                self.send_error(404, 'Mock Not Found: ' + self.path)
+
+        def do_POST(self):
+            self.send_error(405, 'Method not allowed: ' + self.path)
+
+    httpd = http.server.HTTPServer(ADDRESS, Handler)
+    httpd.data = data
+    process = multiprocessing.Process(target=httpd.serve_forever)
+    process.start()
+    return process
+
+
+def mockKill(child):
+    child.terminate()
+    child.join()
+
+
+class TestTestsScan(unittest.TestCase):
+    def setUp(self):
+        self.child = mockServer()
+        self.temp = tempfile.mkdtemp()
+        self.repo = "project/repo"
+        self.pull_number = "1"
+        self.context = "fedora/nightly"
+        self.revision = "abcdef"
+
+    def tearDown(self):
+        mockKill(self.child)
+        shutil.rmtree(self.temp)
+
+    def expected_command(self):
+        expected_output = f"""./s3-streamer --repo {self.repo} --test-name pull-{self.pull_number}-\\d+-\\d+
+--github-context {self.context} --revision {self.revision} -- /bin/sh -c "PRIORITY=0005 ./make-checkout --verbose
+--repo={self.repo} {self.revision} && cd make-checkout-workdir && TEST_OS=fedora BASE_BRANCH={self.revision}
+COCKPIT_BOTS_REF=main TEST_SCENARIO=nightly ../tests-invoke --pull-number {self.pull_number}
+--revision {self.revision} --repo {self.repo}"
+"""
+        return " ".join(expected_output.splitlines()).strip()
+
+    def expected_human_output(self, pull_number=None):
+        if pull_number is None:
+            pull_number = self.pull_number
+        return f"pull-{pull_number}      {self.context}            {self.revision}" \
+               + f"     5.99999  ({self.repo}) [bots@main]"
+
+    def test_pull_number(self):
+        script = os.path.join(BOTS_DIR, "tests-scan")
+        cmd = [script, "--dry", "--repo", self.repo, "--pull-number", self.pull_number,
+               "--context", self.context]
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, universal_newlines=True,
+                                env={"GITHUB_API": f"http://{ADDRESS[0]}:{ADDRESS[1]}"})
+        output, stderr = proc.communicate()
+        self.assertEqual(proc.returncode, 0)
+        expected_output = self.expected_command()
+        self.assertRegex(output, expected_output)
+        self.assertIsNone(stderr)
+
+    def test_unkown_pull_number(self):
+        script = os.path.join(BOTS_DIR, "tests-scan")
+        cmd = [script, "--dry", "--repo", self.repo, "--pull-number", "2", "--context", "fedora/nightly"]
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, universal_newlines=True,
+                                env={"GITHUB_API": f"http://{ADDRESS[0]}:{ADDRESS[1]}"})
+        _, stderr = proc.communicate()
+
+        self.assertEqual(proc.returncode, 1)
+        self.assertIsNone(stderr)
+
+    def test_pull_data(self):
+        script = os.path.join(BOTS_DIR, "tests-scan")
+        cmd = [script, "--dry", "--repo", self.repo, "--pull-number", self.pull_number,
+               "--context", self.context]
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, universal_newlines=True,
+                                env={"GITHUB_API": f"http://{ADDRESS[0]}:{ADDRESS[1]}"})
+        output, stderr = proc.communicate()
+        self.assertEqual(proc.returncode, 0)
+        expected_output = self.expected_command()
+        self.assertRegex(output, expected_output)
+        self.assertIsNone(stderr)
+
+    def test_no_arguments(self):
+        script = os.path.join(BOTS_DIR, "tests-scan")
+        cmd = [script, "--dry", "--repo", self.repo, "--context", self.context]
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, universal_newlines=True,
+                                env={"GITHUB_API": f"http://{ADDRESS[0]}:{ADDRESS[1]}"})
+        output, stderr = proc.communicate()
+        self.assertEqual(proc.returncode, 0)
+        expected_output = self.expected_command()
+        self.assertRegex(output.strip(), expected_output)
+        self.assertIsNone(stderr)
+
+    def test_pull_number_human_readable(self):
+        script = os.path.join(BOTS_DIR, "tests-scan")
+        cmd = [script, "--dry", "--repo", self.repo, "--pull-number", self.pull_number,
+               "--context", self.context, "-v"]
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, universal_newlines=True,
+                                env={"GITHUB_API": f"http://{ADDRESS[0]}:{ADDRESS[1]}"})
+        output, stderr = proc.communicate()
+        self.assertEqual(proc.returncode, 0)
+        expected_output = self.expected_human_output()
+        self.assertEqual(output.strip(), expected_output)
+        self.assertIsNone(stderr)
+
+    def test_pull_data_human_readable(self):
+        script = os.path.join(BOTS_DIR, "tests-scan")
+        cmd = [script, "--dry", "--repo", self.repo, "--pull-number", self.pull_number,
+               "--context", self.context, "-v"]
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, universal_newlines=True,
+                                env={"GITHUB_API": f"http://{ADDRESS[0]}:{ADDRESS[1]}"})
+        output, stderr = proc.communicate()
+        self.assertEqual(proc.returncode, 0)
+        expected_output = self.expected_human_output()
+        self.assertEqual(output.strip(), expected_output)
+        self.assertIsNone(stderr)
+
+    def test_no_arguments_human_readable(self):
+        script = os.path.join(BOTS_DIR, "tests-scan")
+        cmd = [script, "--dry", "--repo", self.repo, "--context", self.context, "-v"]
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, universal_newlines=True,
+                                env={"GITHUB_API": f"http://{ADDRESS[0]}:{ADDRESS[1]}"})
+        output, stderr = proc.communicate()
+        self.assertEqual(proc.returncode, 0)
+        expected_output = self.expected_human_output()
+        self.assertEqual(output.strip(), expected_output)
+        self.assertIsNone(stderr)
