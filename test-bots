@@ -39,7 +39,7 @@ def main():
         module = SourceFileLoader(name.replace("-", "_"), filename).load_module()
         suite.addTest(loader.loadTestsFromModule(module))
 
-    runner = unittest.TextTestRunner()
+    runner = unittest.TextTestRunner(verbosity=2)
     result = runner.run(suite)
     if result.wasSuccessful():
         return 0
