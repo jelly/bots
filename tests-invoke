@@ -95,8 +95,12 @@ def main():
         return_code = p.returncode
         sys.stderr.write("Test run finished, return code: {0}\n".format(return_code))
         if not api.has_open_prs(opts.revision) and return_code != 0:
+            test_scenario = os.getenv("TEST_SCENARIO", "")
+            title = "Nightly tests did not succeed"
+            if test_scenario != "":
+                title += f" on {test_scenario}"
             data = {
-                "title": "Nightly tests did not succeed",
+                "title": title,
                 "body": f"Tests failed on {opts.revision}",
                 "labels": ["nightly"]
             }
