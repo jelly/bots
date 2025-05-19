@@ -14,6 +14,8 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 import asyncio
+import base64
+import binascii
 import contextlib
 import json
 import logging
@@ -133,17 +135,16 @@ class GitHub(Forge, contextlib.AsyncExitStack):
         await self.post(f'repos/{repo}/issues', issue)
 
     async def read_file(self, subject: Subject, filename: str) -> str | None:
-        async def read_once() -> str | None:
-            try:
-                async with self.session.get(self.content / subject.repo / subject.sha / filename) as response:
-                    logger.debug('response %r', response)
-                    return await response.text()
-            except aiohttp.ClientResponseError as exc:
-                if exc.status == 404:
-                    return None
-                raise
+        try:
+            content = await self.get_obj(f'repos/{subject.repo}/contents/{filename}', {'ref': subject.sha})
+        except aiohttp.ClientError as exc:
+            logger.warning('Error when reading file %s#%s: %r', subject.repo, filename, exc)
+            return None
 
-        return await retry(read_once)
+        try:
+            return base64.b64decode(str(content['content'])).decode().strip()
+        except binascii.Error:
+            return None
 
     def get_status(self, repo: str, sha: str, context: str | None, location: URL) -> Status:
         return GitHubStatus(self, repo, sha, context, location)
