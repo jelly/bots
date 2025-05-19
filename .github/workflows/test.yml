@@ -67,6 +67,7 @@ jobs:
         with:
           repository: cockpit-project/cockpituous
           path: cockpituous
+          ref: read-file-adjustments
 
       - name: Install test dependencies
         if: steps.changes.outputs.changed
