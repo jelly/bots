@@ -115,46 +115,12 @@ async def run_container(job: Job, subject: Subject, ctx: JobContext, log: LogStr
 
         async with spawn(args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT) as container:
             try:
-                # Log data until we hit EOF
-                assert container.stdout is not None
-                async for block in read_utf8(container.stdout):
-                    log.write(block)
-                    if ctx.debug:
-                        if os.isatty(1):
-                            sys.stdout.write(f'\033[34m{block}\033[0m')  # da ba dee, da ba di...
-                        else:
-                            sys.stdout.write(block)
-
-                # We don't know yet if the container was ever actually created.
-                # We can't rely on the exit status, since it's also non-zero if
-                # the container ran successfully but the job returned non-zero.
-                # We can use the existence of the cidfile, however.  By now
-                # (important: after we got EOF in the loop above), if the
-                # container got created, the cidfile will have also been
-                # created.  If not, this was a container creation failure, which
-                # is an internal error, not a Failure.  Be noisy about it.
-                try:
-                    cid = cidfile.read_text().strip()
-                except FileNotFoundError as exc:
-                    raise RuntimeError('Failed to create container') from exc
-
-                # Upload all attachments
-                # TODO: live updates
-                # TODO: invent async tarfile for StreamReader
-                await run([*ctx.container_cmd, 'cp', '--', f'{cid}:/var/tmp/attachments/.', f'{attachments}'])
-                for file in attachments.rglob('*'):
-                    with contextlib.suppress(IsADirectoryError):
-                        log.index.write(str(file.relative_to(attachments)), file.read_bytes())
-
-                if returncode := await container.wait():
-                    raise Failure(f'Container exited with code {returncode}')
-
-            finally:
-                ret = await run([*ctx.container_cmd, 'rm', '--force', '--time=0', f'--cidfile={tmpdir}/cidfile'],
-                              stdout=asyncio.subprocess.DEVNULL)  # don't show container ID output
-                if ret != 0:
-                    logger.error('podman rm failed, killing podman process pid %r', container.pid)
-                    container.kill()
+                await asyncio.wait_for(wait_for_test_completion(container, attachments, ctx, log, tmpdir),
+                                       timeout=30)
+            except asyncio.TimeoutError:
+                logger.error("test timed out")
+                container.kill()
+                await container.wait()
 
 
 async def run_job(job: Job, ctx: JobContext) -> None:
@@ -225,3 +191,49 @@ async def run_job(job: Job, ctx: JobContext) -> None:
         finally:
             log.close()
             index.sync()
+
+
+async def wait_for_test_completion(container: asyncio.subprocess.Process, attachments: Path,
+                                   ctx: JobContext, log: LogStreamer, tmpdir: Path):
+    try:
+        # Log data until we hit EOF
+        assert container.stdout is not None
+        async for block in read_utf8(container.stdout):
+            log.write(block)
+            if ctx.debug:
+                if os.isatty(1):
+                    sys.stdout.write(f'\033[34m{block}\033[0m')  # da ba dee, da ba di...
+                else:
+                    sys.stdout.write(block)
+
+        # We don't know yet if the container was ever actually created.
+        # We can't rely on the exit status, since it's also non-zero if
+        # the container ran successfully but the job returned non-zero.
+        # We can use the existence of the cidfile, however.  By now
+        # (important: after we got EOF in the loop above), if the
+        # container got created, the cidfile will have also been
+        # created.  If not, this was a container creation failure, which
+        # is an internal error, not a Failure.  Be noisy about it.
+        try:
+            cid = cidfile.read_text().strip()
+        except FileNotFoundError as exc:
+            logger.error("File not found: %s", exc)
+            raise RuntimeError('Failed to create container') from exc
+
+        # Upload all attachments
+        # TODO: live updates
+        # TODO: invent async tarfile for StreamReader
+        await run([*ctx.container_cmd, 'cp', '--', f'{cid}:/var/tmp/attachments/.', f'{attachments}'])
+        for file in attachments.rglob('*'):
+            with contextlib.suppress(IsADirectoryError):
+                log.index.write(str(file.relative_to(attachments)), file.read_bytes())
+
+        if returncode := await container.wait():
+            raise Failure(f'Container exited with code {returncode}')
+
+    finally:
+        ret = await run([*ctx.container_cmd, 'rm', '--force', '--time=0', f'--cidfile={tmpdir}/cidfile'],
+                      stdout=asyncio.subprocess.DEVNULL)  # don't show container ID output
+        if ret != 0:
+            logger.error('podman rm failed, killing podman process pid %r', container.pid)
+            container.kill()
