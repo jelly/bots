@@ -136,8 +136,8 @@ REPO_BRANCH_CONTEXT: Mapping[str, Mapping[str, Sequence[str]]] = {
             'arch',
             'debian-testing',
             'debian-trixie',
-            'ubuntu-2204',
             'ubuntu-2404',
+            'ubuntu-2604',
             'ubuntu-stable',
             'fedora-43',
             'fedora-44',
@@ -154,7 +154,6 @@ REPO_BRANCH_CONTEXT: Mapping[str, Mapping[str, Sequence[str]]] = {
         '_manual': [
             'centos-10',
             'fedora-rawhide',
-            'ubuntu-2604',
         ],
     },
     'cockpit-project/cockpit-files': {
